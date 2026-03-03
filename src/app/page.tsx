@@ -59,7 +59,7 @@ const CityCanvas = dynamic(() => import("@/components/CityCanvas"), {
 });
 
 // Feature flags — flip to switch milestone banner
-const MILESTONE_MODE: "stars" | "devs" = "stars"; // "stars" = GitHub stars road to 1K, "devs" = total developers
+const MILESTONE_MODE: "stars" | "devs" = "devs"; // "stars" = GitHub stars road to 1K, "devs" = total developers
 
 const THEMES = [
   { name: "Midnight", accent: "#6090e0", shadow: "#203870" },
@@ -2066,7 +2066,7 @@ function HomeContent() {
             ) : (
               // ── Total Developers mode ──
               (() => {
-                const MILESTONES = [10000, 15000, 25000, 50000, 100000];
+                const MILESTONES = [10000, 20000, 50000, 100000];
                 const count = stats.total_developers;
                 if (count <= 0) return null;
 
