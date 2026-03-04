@@ -1,15 +1,15 @@
-import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase";
-import type { TopRepo } from "@/lib/github";
+import { NextResponse } from \"next/server\";
+import { getSupabaseAdmin } from \"@/lib/supabase\";
+import type { TopRepo } from \"@/lib/github\";
 
 // ─── Rate Limiting ───────────────────────────────────────────
 
 async function hashIP(ip: string): Promise<string> {
-  const data = new TextEncoder().encode(ip + (process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""));
-  const buf = await crypto.subtle.digest("SHA-256", data);
+  const data = new TextEncoder().encode(ip + (process.env.SUPABASE_SERVICE_ROLE_KEY ?? \"\"));
+  const buf = await crypto.subtle.digest(\"SHA-256\", data);
   return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+    .map((b) => b.toString(16).padStart(2, \"0\"))
+    .join(\"\");
 }
 
 async function checkRateLimit(ip: string): Promise<boolean> {
@@ -18,23 +18,38 @@ async function checkRateLimit(ip: string): Promise<boolean> {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
   const { count } = await sb
-    .from("add_requests")
-    .select("*", { count: "exact", head: true })
-    .eq("ip_hash", ipHash)
-    .gte("created_at", oneHourAgo);
+    .from(\"add_requests\")
+    .select(\"*\", { count: \"exact\", head: true })
+    .eq(\"ip_hash\", ipHash)
+    .gte(\"created_at\", oneHourAgo);
 
   if ((count ?? 0) >= 10) return false;
 
-  await sb.from("add_requests").insert({ ip_hash: ipHash });
+  await sb.from(\"add_requests\").insert({ ip_hash: ipHash });
   return true;
 }
 
 // ─── GitHub Fetching ─────────────────────────────────────────
 
+// Timeout helper for fetch calls
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeout?: number } = {}
+): Promise<Response> {
+  const { timeout = 15000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  return fetch(url, {
+    ...fetchOptions,
+    signal: controller.signal,
+  }).finally(() => clearTimeout(id));
+}
+
 function ghHeaders(): HeadersInit {
   const h: HeadersInit = {
-    Accept: "application/vnd.github.v3+json",
-    "User-Agent": "git-city-app",
+    Accept: \"application/vnd.github.v3+json\",
+    \"User-Agent\": \"git-city-app\",
   };
   if (process.env.GITHUB_TOKEN) {
     h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
@@ -64,9 +79,10 @@ function buildYearAliases(): string {
   const currentYear = new Date().getFullYear();
   const lines: string[] = [];
   for (let y = currentYear; y >= currentYear - 9; y--) {
-    lines.push(`y${y}: contributionsCollection(from: "${y}-01-01T00:00:00Z", to: "${y}-12-31T23:59:59Z") { contributionCalendar { totalContributions } }`);
+    lines.push(`y${y}: contributionsCollection(from: \"${y}-01-01T00:00:00Z\", to: \"${y}-12-31T23:59:59Z\") { contributionCalendar { totalContributions } }`);
   }
-  return lines.join("\n    ");
+  return lines.join(\"\
+    \");
 }
 
 function computeStreaks(weeks: Array<{ contributionDays: Array<{ contributionCount: number; date: string }> }>): {
@@ -106,6 +122,7 @@ function computeStreaks(weeks: Array<{ contributionDays: Array<{ contributionCou
     const day = allDays[i];
     if (i === allDays.length - 1 && day.date !== today && day.date !== yesterday) break;
     if (i === allDays.length - 1 && day.count === 0 && day.date === today) continue; // today with 0, check yesterday
+
     if (day.count > 0) {
       current_streak++;
     } else {
@@ -121,47 +138,53 @@ async function fetchExpandedGitHubData(login: string): Promise<ExpandedGitHubDat
   if (!token) return null;
 
   const yearAliases = buildYearAliases();
-
   const query = `
     query($login: String!) {
       user(login: $login) {
         createdAt
-        followers { totalCount }
-        following { totalCount }
-        organizations(first: 1) { totalCount }
+        followers {
+          totalCount
+        }
+        following {
+          totalCount
+        }
+        organizations(first: 1) {
+          totalCount
+        }
         repositoriesContributedTo(first: 1, contributionTypes: [COMMIT, PULL_REQUEST]) {
           totalCount
         }
-
         current: contributionsCollection {
           contributionCalendar {
             totalContributions
             weeks {
-              contributionDays { contributionCount, date }
+              contributionDays {
+                contributionCount,
+                date
+              }
             }
           }
           totalPullRequestContributions
           totalIssueContributions
           totalPullRequestReviewContributions
         }
-
         ${yearAliases}
       }
     }
   `;
 
   try {
-    const res = await fetch("https://api.github.com/graphql", {
-      method: "POST",
+    const res = await fetchWithTimeout(\"https://api.github.com/graphql\", {
+      method: \"POST\",
       headers: {
         Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+        \"Content-Type\": \"application/json\",
       },
       body: JSON.stringify({ query, variables: { login } }),
+      timeout: 25000,
     });
 
     if (!res.ok) return null;
-
     const json = await res.json();
     const user = json?.data?.user;
     if (!user) return null;
@@ -192,6 +215,7 @@ async function fetchExpandedGitHubData(login: string): Promise<ExpandedGitHubDat
     const dayOfWeek = now.getDay();
     isoWeekStart.setDate(now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1));
     isoWeekStart.setHours(0, 0, 0, 0);
+
     let current_week_contributions = 0;
     for (const week of weeks) {
       for (const day of week.contributionDays ?? []) {
@@ -216,7 +240,10 @@ async function fetchExpandedGitHubData(login: string): Promise<ExpandedGitHubDat
       ...streaks,
       current_week_contributions,
     };
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === \"AbortError\") {
+      console.error(\"GitHub GraphQL API timeout\");
+    }
     return null;
   }
 }
@@ -232,9 +259,9 @@ export async function GET(
 
   // Check cache first (no rate limit cost)
   const { data: cached } = await sb
-    .from("developers")
-    .select("*")
-    .eq("github_login", username.toLowerCase())
+    .from(\"developers\")
+    .select(\"*\")
+    .eq(\"github_login\", username.toLowerCase())
     .single();
 
   if (cached) {
@@ -242,23 +269,23 @@ export async function GET(
     if (age < 24 * 60 * 60 * 1000) {
       return NextResponse.json(cached, {
         headers: {
-          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+          \"Cache-Control\": \"public, s-maxage=300, stale-while-revalidate=600\",
         },
       });
     }
   }
 
   // Only rate limit when we need to fetch from GitHub
-  if (process.env.NODE_ENV !== "development") {
+  if (process.env.NODE_ENV !== \"development\") {
     const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      request.headers.get("x-real-ip") ??
-      "unknown";
-
+      request.headers.get(\"x-forwarded-for\")?.split(\",\")[0]?.trim() ??
+      request.headers.get(\"x-real-ip\") ??
+      \"unknown\";
     const allowed = await checkRateLimit(ip);
+
     if (!allowed) {
       return NextResponse.json(
-        { error: "Rate limit exceeded. Max 10 lookups per hour." },
+        { error: \"Rate limit exceeded. Max 10 lookups per hour.\" },
         { status: 429 }
       );
     }
@@ -277,26 +304,23 @@ export async function GET(
       size: number;
     };
 
-    const userRes = await fetch(
+    const userRes = await fetchWithTimeout(
       `https://api.github.com/users/${encodeURIComponent(username)}`,
-      { headers }
+      { headers, timeout: 15000 }
     );
 
     if (!userRes.ok) {
       if (userRes.status === 404) {
-        return NextResponse.json(
-          { error: "User not found" },
-          { status: 404 }
-        );
+        return NextResponse.json({ error: \"User not found\" }, { status: 404 });
       }
       if (userRes.status === 403) {
         return NextResponse.json(
-          { error: "GitHub API rate limit exceeded." },
+          { error: \"GitHub API rate limit exceeded.\" },
           { status: 429 }
         );
       }
       return NextResponse.json(
-        { error: "Failed to fetch user data" },
+        { error: \"Failed to fetch user data\" },
         { status: userRes.status }
       );
     }
@@ -304,9 +328,9 @@ export async function GET(
     const ghUser = await userRes.json();
 
     // Reject organizations
-    if (ghUser.type === "Organization") {
+    if (ghUser.type === \"Organization\") {
       return NextResponse.json(
-        { error: "Organizations are not supported. Search for a user profile instead." },
+        { error: \"Organizations are not supported. Search for a user profile instead.\" },
         { status: 400 }
       );
     }
@@ -314,9 +338,9 @@ export async function GET(
     // Fetch expanded GitHub data (GraphQL) and first page of repos in parallel
     const [expanded, reposPage1Res] = await Promise.all([
       fetchExpandedGitHubData(ghUser.login),
-      fetch(
+      fetchWithTimeout(
         `https://api.github.com/users/${encodeURIComponent(username)}/repos?sort=pushed&per_page=100&page=1`,
-        { headers }
+        { headers, timeout: 15000 }
       ),
     ]);
 
@@ -325,7 +349,7 @@ export async function GET(
     // Reject users with zero public activity
     if (contributions === 0 && ghUser.public_repos === 0) {
       return NextResponse.json(
-        { error: "This user has no public activity on GitHub yet." },
+        { error: \"This user has no public activity on GitHub yet.\" },
         { status: 400 }
       );
     }
@@ -336,12 +360,13 @@ export async function GET(
     if (repos.length >= 100) {
       const extraPages = await Promise.all(
         [2, 3, 4, 5].map((page) =>
-          fetch(
+          fetchWithTimeout(
             `https://api.github.com/users/${encodeURIComponent(username)}/repos?sort=pushed&per_page=100&page=${page}`,
-            { headers }
-          ).then((r) => (r.ok ? r.json() as Promise<RepoItem[]> : []))
+            { headers, timeout: 15000 }
+          ).then((r) => (r.ok ? (r.json() as Promise<RepoItem[]>) : []))
         )
       );
+
       for (const page of extraPages) {
         if (page.length === 0) break;
         repos = repos.concat(page);
@@ -350,24 +375,21 @@ export async function GET(
 
     // Derived fields
     const ownRepos = repos.filter((r) => !r.fork);
-    const totalStars = ownRepos.reduce(
-      (s, r) => s + r.stargazers_count,
-      0
-    );
+    const totalStars = ownRepos.reduce((s, r) => s + r.stargazers_count, 0);
 
     // Primary language by total repo size
     const langCounts: Record<string, number> = {};
     const uniqueLanguages = new Set<string>();
+
     for (const repo of ownRepos) {
       if (repo.language) {
-        langCounts[repo.language] =
-          (langCounts[repo.language] || 0) + repo.size;
+        langCounts[repo.language] = (langCounts[repo.language] || 0) + repo.size;
         uniqueLanguages.add(repo.language);
       }
     }
+
     const primaryLanguage =
-      Object.entries(langCounts).sort(([, a], [, b]) => b - a)[0]?.[0] ??
-      null;
+      Object.entries(langCounts).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null;
 
     // Top 5 repos by stars
     const topRepos: TopRepo[] = ownRepos
@@ -393,44 +415,48 @@ export async function GET(
       primary_language: primaryLanguage,
       top_repos: topRepos,
       fetched_at: new Date().toISOString(),
+
       // v2 fields
-      ...(expanded ? {
-        contributions_total: expanded.contributions_total,
-        contribution_years: expanded.contribution_years,
-        total_prs: expanded.total_prs,
-        total_reviews: expanded.total_reviews,
-        total_issues: expanded.total_issues,
-        repos_contributed_to: expanded.repos_contributed_to,
-        followers: expanded.followers,
-        following: expanded.following,
-        organizations_count: expanded.organizations_count,
-        account_created_at: expanded.account_created_at,
-        current_streak: expanded.current_streak,
-        longest_streak: expanded.longest_streak,
-        active_days_last_year: expanded.active_days_last_year,
-        language_diversity: uniqueLanguages.size,
-        current_week_contributions: expanded.current_week_contributions,
-      } : {}),
+      ...(expanded
+        ? {
+            contributions_total: expanded.contributions_total,
+            contribution_years: expanded.contribution_years,
+            total_prs: expanded.total_prs,
+            total_reviews: expanded.total_reviews,
+            total_issues: expanded.total_issues,
+            repos_contributed_to: expanded.repos_contributed_to,
+            followers: expanded.followers,
+            following: expanded.following,
+            organizations_count: expanded.organizations_count,
+            account_created_at: expanded.account_created_at,
+            current_streak: expanded.current_streak,
+            longest_streak: expanded.longest_streak,
+            active_days_last_year: expanded.active_days_last_year,
+            language_diversity: uniqueLanguages.size,
+            current_week_contributions: expanded.current_week_contributions,
+          }
+        : {}),
     };
 
     // Check if this dev already exists (to detect new buildings)
     const { data: existing } = await sb
-      .from("developers")
-      .select("id")
-      .eq("github_login", record.github_login)
+      .from(\"developers\")
+      .select(\"id\")
+      .eq(\"github_login\", record.github_login)
       .maybeSingle();
+
     const isNewDev = !existing;
 
     const { data: upserted, error: upsertError } = await sb
-      .from("developers")
-      .upsert(record, { onConflict: "github_login" })
+      .from(\"developers\")
+      .upsert(record, { onConflict: \"github_login\" })
       .select()
       .single();
 
     if (upsertError) {
-      console.error("Upsert error:", upsertError);
+      console.error(\"Upsert error:\", upsertError);
       return NextResponse.json(
-        { error: "Failed to save developer data" },
+        { error: \"Failed to save developer data\" },
         { status: 500 }
       );
     }
@@ -438,8 +464,8 @@ export async function GET(
     // New building added to the city → feed event
     const devId = upserted?.id;
     if (isNewDev && devId) {
-      await sb.from("activity_feed").insert({
-        event_type: "dev_joined",
+      await sb.from(\"activity_feed\").insert({
+        event_type: \"dev_joined\",
         actor_id: devId,
         metadata: { login: record.github_login },
       });
@@ -447,24 +473,30 @@ export async function GET(
 
     // Only recalculate ranks when a new developer joins (not on every refresh)
     if (isNewDev) {
-      await sb.rpc("recalculate_ranks");
+      await sb.rpc(\"recalculate_ranks\");
     }
 
     const { data: withRank } = await sb
-      .from("developers")
-      .select("*")
-      .eq("github_login", record.github_login)
+      .from(\"developers\")
+      .select(\"*\")
+      .eq(\"github_login\", record.github_login)
       .single();
 
     return NextResponse.json(withRank ?? upserted, {
       headers: {
-        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+        \"Cache-Control\": \"public, s-maxage=300, stale-while-revalidate=600\",
       },
     });
   } catch (err) {
-    console.error("Dev route error:", err);
+    if (err instanceof Error && err.name === \"AbortError\") {
+      return NextResponse.json(
+        { error: \"GitHub API request timed out. Please try again later.\" },
+        { status: 504 }
+      );
+    }
+    console.error(\"Dev route error:\", err);
     return NextResponse.json(
-      { error: "Failed to fetch GitHub data" },
+      { error: \"Failed to fetch GitHub data\" },
       { status: 500 }
     );
   }
